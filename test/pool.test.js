@@ -2,7 +2,8 @@
 
 require('should');
 
-var Pool = require('..');
+var Pool = require('..'),
+    debug = require('debug')('pool2');;
 
 describe('validNum', function () {
     it('should return the default if opts doesn\'t exist', function () {
@@ -35,6 +36,15 @@ describe('Pool', function () {
     function seqAcquire(cb) { cb(null, { seq: _seq++ }); }
     function disposeStub(res, cb) { cb(); }
     function noop() { }
+    function createCountDownLatch(count, cb) {
+        var counter = count;
+        var countdownLatch = function () {
+            if (--counter === 0) {
+                cb();
+            }
+        };
+        return countdownLatch;
+    }
     
     var pool;
     afterEach(function () { pool._destroyPool(); });
@@ -341,6 +351,8 @@ describe('Pool', function () {
     });
     
     it('should fail acquire when pool is full', function (done) {
+        var countdownLatch = createCountDownLatch(2, done);
+
         pool = new Pool({
             acquire: seqAcquire,
             dispose: disposeStub,
@@ -351,11 +363,12 @@ describe('Pool', function () {
         pool.acquire(function (err, res) {
             pool.acquire(function (err, res2) {
                 pool.release(res2);
+                countdownLatch();
             });
             pool.acquire(function (err) {
                 err.message.should.match(/Pool is full/);
                 pool.release(res);
-                done();
+                countdownLatch();
             });
         });
     });
@@ -710,5 +723,31 @@ describe('Pool', function () {
         pool.acquire(function (err, res) {
             pool.release(res);
         });
+    });
+
+    it('should drain the resource pool if ending and after all resource requests are fulfilled', function (done) {
+        pool = new Pool({
+            acquire: seqAcquire,
+            dispose: disposeStub,
+            ping: noop,
+            pingTimeout: 20,
+            requestTimeout: 50,
+            max: 1
+        });
+        pool.acquire(function (err, res) {
+            (err).should.be.Error;
+        });
+        pool.acquire(function (err, res) {
+            (err).should.be.Error;
+        });
+        pool.acquire(function (err, res) {
+            (err).should.be.Error;
+        });
+        pool.end(function (err, res) {
+            (!err).should.be.ok;
+        });
+        pool.once('drain', function () {
+            done();
+        })
     });
 });
